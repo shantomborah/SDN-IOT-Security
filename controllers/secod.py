@@ -25,6 +25,7 @@ class switching_hub(app_manager.RyuApp):
 		self.packet_counter = {}
 		self.switches = {}
 		self.suspects = {}
+		self.blocked = []
 
 		# Constants
 		self.omega = 8
@@ -50,6 +51,13 @@ class switching_hub(app_manager.RyuApp):
 					S += self.packet_counter[dpid][in_port]
 					self.packet_counter[dpid][in_port] = 0
 
+				# Check if blocked
+				if dpid in self.blocked:
+					if S < self.omega:
+						self.blocked.remove(dpid)
+					else:
+						continue
+
 				# Compare with threshold for DoS detection
 				if (S > self.omega) and (dpid not in self.suspects):
 					self.suspects[dpid] = counter
@@ -74,11 +82,12 @@ class switching_hub(app_manager.RyuApp):
 		datapath = self.switches[dpid]
 		ofproto = datapath.ofproto
 		parser = datapath.ofproto_parser
-		match = parser.OFPMatch()
 
 		# Remove table miss entry
+		match = parser.OFPMatch()
 		inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, [])]
-		mod = parser.OFPFlowMod(datapath=datapath, priority=0, match=match, instructions=inst, cookie=1, command=ofproto.OFPFC_MODIFY_STRICT)
+		mod = parser.OFPFlowMod(datapath=datapath, priority=3, cookie=3, match=match, instructions=inst, hard_timeout=10)
+		# mod = parser.OFPFlowMod(datapath=datapath, priority=0, cookie=1, command=ofproto.OFPFC_MODIFY_STRICT)
 		datapath.send_msg(mod)
 
 		# Record suspect
@@ -106,17 +115,20 @@ class switching_hub(app_manager.RyuApp):
 				self.add_flow(datapath, 2, match, [], cookie=2)
 
 		# Repair table-miss
-		match = parser.OFPMatch()
-		actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
-		inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-		mod = parser.OFPFlowMod(datapath=datapath, priority=0, match=match, instructions=inst, cookie=1, command=ofproto.OFPFC_MODIFY_STRICT)
-		datapath.send_msg(mod)
+		# match = parser.OFPMatch()
+		# actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+		# inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+		# mod = parser.OFPFlowMod(datapath=datapath, priority=0, match=match, instructions=inst, cookie=1, command=ofproto.OFPFC_MODIFY_STRICT)
+		# datapath.send_msg(mod)
 
 	# Switch defender
 	def switch_defender(self, dpid):
 
 		# Log message
 		self.logger.info("Switch defender activated for switch id %s", dpid)
+
+		# Add to blocklist
+		self.blocked.append(dpid)
 
 	# Install table-miss flow entry
 	@set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -138,6 +150,14 @@ class switching_hub(app_manager.RyuApp):
 	# Handle received packets
 	@set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
 	def packet_in_handler(self, ev):
+
+		# Check if blocked
+		if ev.msg.datapath.id in self.blocked:
+			dpid = ev.msg.datapath.id
+			in_port = ev.msg.match['in_port']
+			self.packet_counter[dpid].setdefault(in_port, 0)
+			self.packet_counter[dpid][in_port] += 1
+			return
 
 		# Get switch info
 		msg = ev.msg

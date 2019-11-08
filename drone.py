@@ -46,6 +46,6 @@ if __name__ == '__main__':
 	# Start up the net
 	net = Mininet(topo=topology.zodiac(n=3), host=CPULimitedHost, link=TCLink, controller=None)
 	net.start()
-	controller(net, controller_path, tls_data=tls_data)
+	controller(net, controller_path) #, tls_data=tls_data)
 	CLI(net)
 	net.stop()
